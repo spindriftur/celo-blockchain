@@ -116,7 +116,7 @@ func (c *core) handleCommit(msg *istanbul.Message) error {
 
 	err = c.checkMessage(istanbul.MsgCommit, commit.Subject.View)
 	if err != nil {
-		logger.Debug("failed to decode commit", "from", msg.Address, "err", err)
+		logger.Debug("failed to decode commit", "from", msg.Address, "err", err, "view", commit.Subject.View)
 	}
 
 	if err == errOldMessage {

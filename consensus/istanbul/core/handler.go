@@ -196,7 +196,7 @@ func (c *core) handleCheckedMsg(msg *istanbul.Message, src istanbul.Validator) e
 		}
 		return err
 	}
-
+	logger.Debug("Handling istanbul message", "code", msg.Code)
 	switch msg.Code {
 	case istanbul.MsgPreprepare:
 		return catchFutureMessages(c.handlePreprepare(msg))
