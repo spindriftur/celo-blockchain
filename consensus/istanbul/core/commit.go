@@ -104,14 +104,20 @@ func (c *core) broadcastCommit(sub *istanbul.Subject) {
 }
 
 func (c *core) handleCommit(msg *istanbul.Message) error {
+	logger := c.newLogger("func", "handleCommit")
+	logger.Debug("handling commit", "from", msg.Address)
 	// Decode COMMIT message
 	var commit *istanbul.CommittedSubject
 	err := msg.Decode(&commit)
 	if err != nil {
+		logger.Debug("failed to decode commit", "from", msg.Address)
 		return errFailedDecodeCommit
 	}
 
 	err = c.checkMessage(istanbul.MsgCommit, commit.Subject.View)
+	if err != nil {
+		logger.Debug("failed to decode commit", "from", msg.Address, "err", err)
+	}
 
 	if err == errOldMessage {
 		// Discard messages from previous views, unless they are commits from the previous sequence,
@@ -159,6 +165,7 @@ func (c *core) handleCheckedCommitForPreviousSequence(msg *istanbul.Message, com
 		return errInconsistentSubject
 	}
 
+	logger.Debug("Calling AddParentCommit", "validator", msg.Address, "number", headBlock.Number().Uint64())
 	// Add the ParentCommit to current round state
 	if err := c.current.AddParentCommit(msg); err != nil {
 		logger.Error("Failed to record parent seal", "m", msg, "err", err)
