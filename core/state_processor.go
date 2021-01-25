@@ -17,6 +17,8 @@
 package core
 
 import (
+	"time"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/misc"
@@ -25,6 +27,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 )
 
@@ -54,6 +57,8 @@ func NewStateProcessor(config *params.ChainConfig, bc *BlockChain, engine consen
 // returns the amount of gas that was used in the process. If any of the
 // transactions failed to execute due to insufficient gas it will return an error.
 func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg vm.Config) (types.Receipts, []*types.Log, uint64, error) {
+	start := time.Now()
+
 	var (
 		receipts types.Receipts
 		usedGas  = new(uint64)
@@ -98,7 +103,8 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		}
 		receipts = append(receipts, receipt)
 	}
-
+	// TODO: Reduce this log level before merging
+	log.Warn("Finished processing block", "func", "Process", "duration", time.Since(start), "block", header.Number.Uint64(), "usedGas", *usedGas, "txCount", len(block.Transactions()))
 	return receipts, allLogs, *usedGas, nil
 }
 
