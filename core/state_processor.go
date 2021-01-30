@@ -25,7 +25,10 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/params"
+	lru "github.com/hashicorp/golang-lru"
 )
 
 // StateProcessor is a basic Processor, which takes care of transitioning
@@ -155,3 +158,169 @@ func ApplyTransaction(config *params.ChainConfig, bc vm.ChainContext, txFeeRecip
 
 	return receipt, err
 }
+
+// ---------------------------------------------------------
+// CachingStateProcessor
+// ---------------------------------------------------------
+
+const (
+	stateCacheLimit = 256
+)
+
+// StateProcessResult represents processing results from StateProcessor.
+type StateProcessResult struct {
+	state    *state.StateDB
+	receipts types.Receipts
+	logs     []*types.Log
+	usedGas  uint64
+	err      error
+}
+
+// CachingStateProcessor incorporates StateProcessor and StateProcessCache
+type CachingStateProcessor struct {
+	processor *StateProcessor
+	cache     *lru.Cache
+
+	processorRequestGauge metrics.Gauge // Gauge for total number of requests to StateProcessor.Process
+	cacheHitGauge         metrics.Gauge // Gauge for cache hit
+	cacheLenGauge         metrics.Gauge // Gauge for cache length
+}
+
+// NewCachingStateProcessor initialises a new CachingStateProcessor.
+func NewCachingStateProcessor(config *params.ChainConfig, bc *BlockChain, engine consensus.Engine) *CachingStateProcessor {
+	log.Trace("Tong should call NEW")
+	cache, _ := lru.New(stateCacheLimit)
+	return &CachingStateProcessor{
+		processor:             NewStateProcessor(config, bc, engine),
+		cache:                 cache,
+		processorRequestGauge: metrics.NewRegisteredGauge("core/caching_state_processor/processorRequest", nil),
+		cacheHitGauge:         metrics.NewRegisteredGauge("core/caching_state_processor/cacheHit", nil),
+		cacheLenGauge:         metrics.NewRegisteredGauge("core/caching_state_processor/cacheLen", nil),
+	}
+}
+
+// Process checks the cache before doing actual job
+func (cp *CachingStateProcessor) Process(block *types.Block, state *state.StateDB, cfg vm.Config) (receipts types.Receipts, logs []*types.Log, usedGas uint64, err error) {
+	cp.processorRequestGauge.Inc(1)
+	//fmt.Println("processorRequestGauge", "value", cp.processorRequestGauge.Value())
+	cp.cacheLenGauge.Update(int64(cp.cache.Len()))
+	//fmt.Println("4444 New block", "blockNumber", block.Number(), "blockRoot", block.Header().Root.Hex(), "state", state.IntermediateRoot(true).Hex())
+
+	sealHash := cp.processor.engine.SealHash(block.Header())
+	//fmt.Println("sealHash", "val", sealHash)
+	if value, ok := cp.cache.Get(sealHash); ok {
+
+		cp.cacheHitGauge.Inc(1)
+		//fmt.Println("cacheLenGauge", "value", cp.cacheLenGauge.Value())
+		//fmt.Println("cacheHitGauge", "value", cp.cacheHitGauge.Value())
+
+		r := value.(*StateProcessResult)
+		// Different block could share same sealhash, deep copy here to prevent write-write conflict.
+		var (
+			receipts = make([]*types.Receipt, len(r.receipts))
+			logs     []*types.Log
+			hash     = block.Hash()
+		)
+		for i, receipt := range r.receipts {
+			// add block location fields
+			receipt.BlockHash = hash
+			receipt.BlockNumber = block.Number()
+			receipt.TransactionIndex = uint(i)
+
+			receipts[i] = new(types.Receipt)
+			*receipts[i] = *receipt
+			// Update the block hash in all logs since it is now available and not when the
+			// receipt/log of individual transactions were created.
+			for _, log := range receipt.Logs {
+				log.BlockHash = hash
+				// Handle block finalization receipt
+				if (log.TxHash == common.Hash{}) {
+					log.TxHash = hash
+				}
+			}
+			logs = append(logs, receipt.Logs...)
+		}
+		*state = *r.state.Copy()
+		return receipts, logs, r.usedGas, r.err
+	}
+
+	receipts, logs, usedGas, err = cp.processor.Process(block, state, cfg)
+	var (
+		copyReceipts = make([]*types.Receipt, len(receipts))
+		copyLogs     []*types.Log
+		hash         = block.Hash()
+	)
+	for i, receipt := range receipts {
+		// add block location fields
+		receipt.BlockHash = hash
+		receipt.BlockNumber = block.Number()
+		receipt.TransactionIndex = uint(i)
+
+		copyReceipts[i] = new(types.Receipt)
+		*copyReceipts[i] = *receipt
+		// Update the block hash in all logs since it is now available and not when the
+		// receipt/log of individual transactions were created.
+		for _, log := range receipt.Logs {
+			log.BlockHash = hash
+			// Handle block finalization receipt
+			if (log.TxHash == common.Hash{}) {
+				log.TxHash = hash
+			}
+		}
+		copyLogs = append(copyLogs, receipt.Logs...)
+	}
+
+	//fmt.Println("5555 New block", "blockNumber", block.Number(), "blockRoot", block.Header().Root.Hex(), "state", state.IntermediateRoot(true).Hex())
+	cp.cache.Add(sealHash, &StateProcessResult{state: state.Copy(), receipts: receipts, logs: logs, usedGas: usedGas, err: err})
+	return
+}
+
+//// StateProcessCache defines a cache for StateProcessResult which results from StateProcessor
+//type Cache interface {
+//	// Add puts StateProcessResult, using block's sealHash as key
+//	Add(sealHash common.Hash, result *StateProcessResult)
+//
+//	// Get retrieves StateProcessResult, using block's sealHash as key
+//	Get(sealHash common.Hash) (*StateProcessResult, bool)
+//}
+
+//// StateProcessCache implements a thread safe StateProcessCache
+//type StateProcessCache struct {
+//	cache   map[common.Hash]*StateProcessResult
+//	cacheMu *sync.RWMutex
+//}
+
+//// NewBlockProcessResultCache returns a StateProcessCache
+//func NewBlockProcessResultCache() *StateProcessCache {
+//	return &StateProcessCache{
+//		cache:   make(map[common.Hash]*StateProcessResult),
+//		cacheMu: new(sync.RWMutex),
+//	}
+//}
+
+//// Add adds a value to the cache
+//func (pc *StateProcessCache) Add(sealHash common.Hash, result *StateProcessResult) {
+//	pc.cacheMu.Lock()
+//	defer pc.cacheMu.Unlock()
+//
+//	pc.clear()
+//	pc.cache[sealHash] = result
+//}
+//
+//// Get gets a value from the cache
+//func (pc *StateProcessCache) Get(sealHash common.Hash) (result *StateProcessResult, ok bool) {
+//	pc.cacheMu.RLock()
+//	defer pc.cacheMu.RUnlock()
+//
+//	result, ok = pc.cache[sealHash]
+//	return
+//}
+//
+//// clear removes stale entries in the cache
+//func (pc *StateProcessCache) clear() {
+//	for hash, result := range pc.cache {
+//		if result.blockNumber+staleThreshold <= number {
+//			delete(w.pendingTasks, h)
+//		}
+//	}
+//}
