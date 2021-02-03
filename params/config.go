@@ -293,6 +293,11 @@ func (c *ChainConfig) IsEIP158(num *big.Int) bool {
 	return isForked(c.EIP158Block, num)
 }
 
+// IsCIPEth returns whether eth-compatibility transactions are enabled
+func (c *ChainConfig) IsCIPEth(num *big.Int) bool {
+	return true
+}
+
 // IsByzantium returns whether num is either equal to the Byzantium fork block or greater.
 func (c *ChainConfig) IsByzantium(num *big.Int) bool {
 	return isForked(c.ByzantiumBlock, num)
