@@ -18,7 +18,6 @@ package miner
 
 import (
 	"bytes"
-	"fmt"
 	"math/big"
 	"sync"
 	"sync/atomic"
@@ -978,7 +977,6 @@ func (w *worker) commit(interval func(), update bool, start time.Time) error {
 	s := w.current.state.Copy()
 
 	block, err := w.engine.FinalizeAndAssemble(w.chain, w.current.header, s, w.current.txs, w.current.receipts, w.current.randomness)
-	fmt.Println("111 New block", "blockNumber", block.Number(), "blockRoot", block.Header().Root.Hex(), "state", s.IntermediateRoot(true).Hex())
 
 	// Set the validator set diff in the new header if we're using Istanbul and it's the last block of the epoch
 	if istanbul, ok := w.engine.(consensus.Istanbul); ok {
@@ -1002,8 +1000,6 @@ func (w *worker) commit(interval func(), update bool, start time.Time) error {
 		log.Error("Unable to finalize block", "err", err)
 		return err
 	}
-
-	fmt.Println("222 New block", "blockNumber", block.Number(), "blockRoot", block.Header().Root.Hex(), "state", s.IntermediateRoot(true).Hex())
 
 	if w.isRunning() {
 		if interval != nil {
