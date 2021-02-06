@@ -570,7 +570,6 @@ func (sb *Backend) Verify(proposal istanbul.Proposal) (time.Duration, error) {
 	}
 
 	// Validate the block
-	fmt.Println("333 New block", "blockNumber", block.Number(), "blockRoot", block.Header().Root.Hex(), "state", state.IntermediateRoot(true).Hex())
 	if err := sb.validateState(block, state, receipts, usedGas); err != nil {
 		sb.logger.Error("verify - Error in validating the block", "err", err)
 		return 0, err
