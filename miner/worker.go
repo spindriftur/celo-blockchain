@@ -161,9 +161,6 @@ type worker struct {
 	txFeeRecipient common.Address
 	extra          []byte
 
-	pendingMu    sync.RWMutex
-	pendingTasks map[common.Hash]*task
-
 	snapshotMu    sync.RWMutex // The lock used to protect the block snapshot and state snapshot
 	snapshotBlock *types.Block
 	snapshotState *state.StateDB
@@ -195,7 +192,6 @@ func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus
 		chain:              eth.BlockChain(),
 		isLocalBlock:       isLocalBlock,
 		unconfirmed:        newUnconfirmedBlocks(eth.BlockChain(), miningLogAtDepth),
-		pendingTasks:       make(map[common.Hash]*task),
 		txsCh:              make(chan core.NewTxsEvent, txChanSize),
 		chainHeadCh:        make(chan core.ChainHeadEvent, chainHeadChanSize),
 		chainSideCh:        make(chan core.ChainSideEvent, chainSideChanSize),
@@ -364,27 +360,14 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 		}
 		recommit = time.Duration(int64(next))
 	}
-	// clearPending cleans the stale pending tasks.
-	clearPending := func(number uint64) {
-		w.pendingMu.Lock()
-		for h, t := range w.pendingTasks {
-			if t.block.NumberU64()+staleThreshold <= number {
-				delete(w.pendingTasks, h)
-			}
-		}
-		w.pendingMu.Unlock()
-	}
 
 	for {
 		select {
 		case <-w.startCh:
-			clearPending(w.chain.CurrentBlock().NumberU64())
 			timestamp = time.Now().Unix()
 			commit(false, commitInterruptNewHead)
 
-		case head := <-w.chainHeadCh:
-			headNumber := head.Block.NumberU64()
-			clearPending(headNumber)
+		case <-w.chainHeadCh:
 			timestamp = time.Now().Unix()
 			commit(false, commitInterruptNewHead)
 
@@ -535,9 +518,14 @@ func (w *worker) taskLoop() {
 			if w.skipSealHook != nil && w.skipSealHook(task) {
 				continue
 			}
-			w.pendingMu.Lock()
-			w.pendingTasks[w.engine.SealHash(task.block.Header())] = task
-			w.pendingMu.Unlock()
+
+			csp := w.chain.Processor().(*core.CachingStateProcessor)
+			csp.Add(sealHash, &core.StateProcessResult{
+				Block:    task.block,
+				State:    task.state,
+				Receipts: task.receipts,
+				UsedGas:  task.block.GasUsed(),
+			})
 
 			if err := w.engine.Seal(w.chain, task.block, w.resultCh, stopCh); err != nil {
 				log.Warn("Block sealing failed", "err", err)
@@ -564,22 +552,22 @@ func (w *worker) resultLoop() {
 				continue
 			}
 			var (
-				sealhash = w.engine.SealHash(block.Header())
+				sealHash = w.engine.SealHash(block.Header())
 				hash     = block.Hash()
 			)
-			w.pendingMu.RLock()
-			task, exist := w.pendingTasks[sealhash]
-			w.pendingMu.RUnlock()
+
+			csp := w.chain.Processor().(*core.CachingStateProcessor)
+			r, exist := csp.Get(sealHash)
 			if !exist {
-				log.Error("Block found but no relative pending task", "number", block.Number(), "sealhash", sealhash, "hash", hash)
+				log.Error("Block found but no relative cache", "number", block.Number(), "sealHash", sealHash, "hash", hash)
 				continue
 			}
 			// Different block could share same sealhash, deep copy here to prevent write-write conflict.
 			var (
-				receipts = make([]*types.Receipt, len(task.receipts))
+				receipts = make([]*types.Receipt, len(r.Receipts))
 				logs     []*types.Log
 			)
-			for i, receipt := range task.receipts {
+			for i, receipt := range r.Receipts {
 				// add block location fields
 				receipt.BlockHash = hash
 				receipt.BlockNumber = block.Number()
@@ -598,14 +586,13 @@ func (w *worker) resultLoop() {
 				}
 				logs = append(logs, receipt.Logs...)
 			}
-			// Commit block and state to database.
-			_, err := w.chain.WriteBlockWithState(block, receipts, logs, task.state, true)
+			//Commit block and state to database.
+			_, err := w.chain.WriteBlockWithState(block, receipts, logs, r.State, true)
 			if err != nil {
-				log.Error("Failed writing block to chain", "err", err)
+				log.Error("Failed WriteBlockWithState", "err", err)
 				continue
 			}
-			log.Info("Successfully sealed new block", "number", block.Number(), "sealhash", sealhash, "hash", hash,
-				"elapsed", common.PrettyDuration(time.Since(task.createdAt)))
+			log.Info("Successfully WriteBlockWithState", "number", block.Number(), "sealHash", sealHash, "hash", hash)
 
 			// Broadcast the block and announce chain insertion event
 			w.mux.Post(core.NewMinedBlockEvent{Block: block})

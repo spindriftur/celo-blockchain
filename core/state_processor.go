@@ -169,11 +169,11 @@ const (
 
 // StateProcessResult represents processing results from StateProcessor.
 type StateProcessResult struct {
-	block    *types.Block
-	state    *state.StateDB
-	receipts types.Receipts
-	logs     []*types.Log
-	usedGas  uint64
+	Block    *types.Block
+	State    *state.StateDB
+	Receipts types.Receipts
+	Logs     []*types.Log
+	UsedGas  uint64
 	err      error
 }
 
@@ -211,18 +211,18 @@ func (cp *CachingStateProcessor) Process(block *types.Block, state *state.StateD
 	// Query the cache
 	r, ok := cp.Get(sealHash)
 	if ok {
-		*state = *r.state
-		return r.receipts, r.logs, r.usedGas, r.err
+		*state = *r.State
+		return r.Receipts, r.Logs, r.UsedGas, r.err
 	}
 	// Do actual processing
 	receipts, logs, usedGas, err = cp.processor.Process(block, state, cfg)
 	cp.cache.Add(sealHash,
 		&StateProcessResult{
-			block:    block,
-			state:    state,
-			receipts: receipts,
-			logs:     logs,
-			usedGas:  usedGas,
+			Block:    block,
+			State:    state,
+			Receipts: receipts,
+			Logs:     logs,
+			UsedGas:  usedGas,
 			err:      err,
 		})
 	return
@@ -246,12 +246,12 @@ func (cp *CachingStateProcessor) Get(sealHash common.Hash) (*StateProcessResult,
 func deepCopy(result *StateProcessResult) (deepCopy *StateProcessResult) {
 	// Different block could share same sealHash, deep copy here to prevent write-write conflict.
 	var (
-		cpyReceipts = make([]*types.Receipt, len(result.receipts))
+		cpyReceipts = make([]*types.Receipt, len(result.Receipts))
 		cpyLogs     []*types.Log
-		block       = result.block
+		block       = result.Block
 		hash        = block.Hash()
 	)
-	for i, receipt := range result.receipts {
+	for i, receipt := range result.Receipts {
 		// add block location fields
 		receipt.BlockHash = hash
 		receipt.BlockNumber = block.Number()
@@ -272,11 +272,11 @@ func deepCopy(result *StateProcessResult) (deepCopy *StateProcessResult) {
 	}
 
 	return &StateProcessResult{
-		block:    block.WithSeal(types.CopyHeader(block.Header())),
-		state:    result.state.Copy(),
-		receipts: cpyReceipts,
-		logs:     cpyLogs,
-		usedGas:  result.usedGas,
+		Block:    block.WithHeader(types.CopyHeader(block.Header())),
+		State:    result.State.Copy(),
+		Receipts: cpyReceipts,
+		Logs:     cpyLogs,
+		UsedGas:  result.UsedGas,
 		err:      result.err,
 	}
 }
