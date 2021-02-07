@@ -141,8 +141,6 @@ type worker struct {
 	txsSub       event.Subscription
 	chainHeadCh  chan core.ChainHeadEvent
 	chainHeadSub event.Subscription
-	chainSideCh  chan core.ChainSideEvent
-	chainSideSub event.Subscription
 
 	// Channels
 	newWorkCh          chan *newWorkReq
@@ -194,7 +192,6 @@ func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus
 		unconfirmed:        newUnconfirmedBlocks(eth.BlockChain(), miningLogAtDepth),
 		txsCh:              make(chan core.NewTxsEvent, txChanSize),
 		chainHeadCh:        make(chan core.ChainHeadEvent, chainHeadChanSize),
-		chainSideCh:        make(chan core.ChainSideEvent, chainSideChanSize),
 		newWorkCh:          make(chan *newWorkReq),
 		taskCh:             make(chan *task),
 		resultCh:           make(chan *types.Block, resultQueueSize),
@@ -208,7 +205,6 @@ func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus
 	worker.txsSub = eth.TxPool().SubscribeNewTxsEvent(worker.txsCh)
 	// Subscribe events for blockchain
 	worker.chainHeadSub = eth.BlockChain().SubscribeChainHeadEvent(worker.chainHeadCh)
-	worker.chainSideSub = eth.BlockChain().SubscribeChainSideEvent(worker.chainSideCh)
 
 	// Sanitize recommit interval if the user-specified one is too short.
 	recommit := worker.config.Recommit
@@ -422,7 +418,6 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 func (w *worker) mainLoop() {
 	defer w.txsSub.Unsubscribe()
 	defer w.chainHeadSub.Unsubscribe()
-	defer w.chainSideSub.Unsubscribe()
 
 	for {
 		select {
@@ -431,10 +426,6 @@ func (w *worker) mainLoop() {
 				h.NewWork()
 			}
 			w.commitNewWork(req.interrupt, req.noempty, req.timestamp)
-
-		case ev := <-w.chainSideCh:
-			// TOOO(nategraf): Remove this subcription, as there is no work to be done here.
-			log.Debug("Message in chan chainSideCh", "hash", ev.Block.Hash(), "number", ev.Block.Number(), "root", ev.Block.Root())
 
 		case ev := <-w.txsCh:
 			// Apply transactions to the pending state if we're not mining.
@@ -479,8 +470,6 @@ func (w *worker) mainLoop() {
 			return
 		case <-w.chainHeadSub.Err():
 			return
-		case <-w.chainSideSub.Err():
-			return
 		}
 	}
 }
@@ -519,9 +508,8 @@ func (w *worker) taskLoop() {
 				continue
 			}
 
-			csp := w.chain.Processor().(*core.CachingStateProcessor)
-			csp.Add(sealHash, &core.StateProcessResult{
-				Block:    task.block,
+			processor := w.chain.Processor().(*core.CachingStateProcessor)
+			processor.Add(sealHash, &core.StateProcessResult{
 				State:    task.state,
 				Receipts: task.receipts,
 				UsedGas:  task.block.GasUsed(),
@@ -556,18 +544,18 @@ func (w *worker) resultLoop() {
 				hash     = block.Hash()
 			)
 
-			csp := w.chain.Processor().(*core.CachingStateProcessor)
-			r, exist := csp.Get(sealHash)
+			processor := w.chain.Processor().(*core.CachingStateProcessor)
+			result, exist := processor.Get(sealHash)
 			if !exist {
 				log.Error("Block found but no relative cache", "number", block.Number(), "sealHash", sealHash, "hash", hash)
 				continue
 			}
 			// Different block could share same sealhash, deep copy here to prevent write-write conflict.
 			var (
-				receipts = make([]*types.Receipt, len(r.Receipts))
+				receipts = make([]*types.Receipt, len(result.Receipts))
 				logs     []*types.Log
 			)
-			for i, receipt := range r.Receipts {
+			for i, receipt := range result.Receipts {
 				// add block location fields
 				receipt.BlockHash = hash
 				receipt.BlockNumber = block.Number()
@@ -587,7 +575,7 @@ func (w *worker) resultLoop() {
 				logs = append(logs, receipt.Logs...)
 			}
 			//Commit block and state to database.
-			_, err := w.chain.WriteBlockWithState(block, receipts, logs, r.State, true)
+			_, err := w.chain.WriteBlockWithState(block, receipts, logs, result.State, true)
 			if err != nil {
 				log.Error("Failed WriteBlockWithState", "err", err)
 				continue
@@ -953,7 +941,7 @@ func (w *worker) commitNewWork(interrupt *int32, noempty bool, timestamp int64) 
 }
 
 // commit runs any post-transaction state modifications, assembles the final block
-// and commits new work if consensus engine is running.
+// and starts a new task if consensus engine is running.
 func (w *worker) commit(interval func(), update bool, start time.Time) error {
 	// Deep copy receipts here to avoid interaction between different tasks.
 	receipts := make([]*types.Receipt, len(w.current.receipts))

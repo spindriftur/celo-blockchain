@@ -169,7 +169,6 @@ const (
 
 // StateProcessResult represents processing results from StateProcessor.
 type StateProcessResult struct {
-	Block    *types.Block
 	State    *state.StateDB
 	Receipts types.Receipts
 	Logs     []*types.Log
@@ -177,7 +176,7 @@ type StateProcessResult struct {
 	err      error
 }
 
-// CachingStateProcessor incorporates StateProcessor and StateProcessCache
+// CachingStateProcessor incorporates StateProcessor and StateProcessCache.
 type CachingStateProcessor struct {
 	processor *StateProcessor // Actual underlying processor
 	cache     *lru.Cache      // Caching StateProcessor, only use sealHash -> StateProcessResult as key-value pair.
@@ -200,25 +199,22 @@ func NewCachingStateProcessor(config *params.ChainConfig, bc *BlockChain, engine
 	}
 }
 
-// Process do the same job as StateProcessor.Process, except it will first query the cache
+// Process do the same job as StateProcessor.Process, except it will first query the cache.
 func (cp *CachingStateProcessor) Process(block *types.Block, state *state.StateDB, cfg vm.Config) (receipts types.Receipts, logs []*types.Log, usedGas uint64, err error) {
 	cp.processorRequestGauge.Inc(1)
-	//fmt.Println("processorRequestGauge", "value", cp.processorRequestGauge.Value())
 	cp.cacheLenGauge.Update(int64(cp.cache.Len()))
-	//fmt.Println("4444 New block", "blockNumber", block.Number(), "blockRoot", block.Header().Root.Hex(), "state", state.IntermediateRoot(true).Hex())
 
-	sealHash := cp.processor.engine.SealHash(block.Header())
 	// Query the cache
+	sealHash := cp.processor.engine.SealHash(block.Header())
 	r, ok := cp.Get(sealHash)
 	if ok {
 		*state = *r.State
 		return r.Receipts, r.Logs, r.UsedGas, r.err
 	}
-	// Do actual processing
+	// Actual processing
 	receipts, logs, usedGas, err = cp.processor.Process(block, state, cfg)
 	cp.cache.Add(sealHash,
 		&StateProcessResult{
-			Block:    block,
 			State:    state,
 			Receipts: receipts,
 			Logs:     logs,
@@ -228,7 +224,7 @@ func (cp *CachingStateProcessor) Process(block *types.Block, state *state.StateD
 	return
 }
 
-// Add will add a StateProcessResult
+// Add adds a deep copied StateProcessResult.
 func (cp *CachingStateProcessor) Add(sealHash common.Hash, result *StateProcessResult) {
 	cp.cache.Add(sealHash, deepCopy(result))
 }
@@ -243,36 +239,23 @@ func (cp *CachingStateProcessor) Get(sealHash common.Hash) (*StateProcessResult,
 }
 
 //deepCopy will deep copy a StateProcessResult.
-func deepCopy(result *StateProcessResult) (deepCopy *StateProcessResult) {
-	// Different block could share same sealHash, deep copy here to prevent write-write conflict.
+func deepCopy(result *StateProcessResult) *StateProcessResult {
 	var (
 		cpyReceipts = make([]*types.Receipt, len(result.Receipts))
 		cpyLogs     []*types.Log
-		block       = result.Block
-		hash        = block.Hash()
 	)
+	// Deep copy receipts
 	for i, receipt := range result.Receipts {
-		// add block location fields
-		receipt.BlockHash = hash
-		receipt.BlockNumber = block.Number()
-		receipt.TransactionIndex = uint(i)
-
 		cpyReceipts[i] = new(types.Receipt)
 		*cpyReceipts[i] = *receipt
-		// Update the block hash in all logs since it is now available and not when the
-		// receipt/log of individual transactions were created.
+		// Deep copy logs
 		for _, log := range receipt.Logs {
-			log.BlockHash = hash
-			// Handle block finalization receipt
-			if (log.TxHash == common.Hash{}) {
-				log.TxHash = hash
-			}
+			cpyLog := new(types.Log)
+			*cpyLog = *log
+			cpyLogs = append(cpyLogs, cpyLog)
 		}
-		cpyLogs = append(cpyLogs, receipt.Logs...)
 	}
-
 	return &StateProcessResult{
-		Block:    block.WithHeader(types.CopyHeader(block.Header())),
 		State:    result.State.Copy(),
 		Receipts: cpyReceipts,
 		Logs:     cpyLogs,
