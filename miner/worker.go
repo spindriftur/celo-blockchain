@@ -51,9 +51,6 @@ const (
 	// chainHeadChanSize is the size of channel listening to ChainHeadEvent.
 	chainHeadChanSize = 10
 
-	// chainSideChanSize is the size of channel listening to ChainSideEvent.
-	chainSideChanSize = 10
-
 	// resubmitAdjustChanSize is the size of resubmitting interval adjustment channel.
 	resubmitAdjustChanSize = 10
 
@@ -75,9 +72,6 @@ const (
 	// intervalAdjustBias is applied during the new resubmit interval calculation in favor of
 	// increasing upper limit or decreasing lower limit so that the limit can be reachable.
 	intervalAdjustBias = 200 * 1000.0 * 1000.0
-
-	// staleThreshold is the maximum depth of the acceptable stale block.
-	staleThreshold = 7
 )
 
 // environment is the worker's current environment and holds all of the current state information.

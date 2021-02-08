@@ -199,7 +199,7 @@ func NewCachingStateProcessor(config *params.ChainConfig, bc *BlockChain, engine
 	}
 }
 
-// Process do the same job as StateProcessor.Process, except it will first query the cache.
+// Process first queries the cache, if miss, then invokes the StateProcessor.
 func (cp *CachingStateProcessor) Process(block *types.Block, state *state.StateDB, cfg vm.Config) (receipts types.Receipts, logs []*types.Log, usedGas uint64, err error) {
 	cp.processorRequestGauge.Inc(1)
 	cp.cacheLenGauge.Update(int64(cp.cache.Len()))
@@ -208,7 +208,7 @@ func (cp *CachingStateProcessor) Process(block *types.Block, state *state.StateD
 	sealHash := cp.processor.engine.SealHash(block.Header())
 	r, ok := cp.Get(sealHash)
 	if ok {
-		*state = *r.State
+		*state = *r.State // replace where state points to
 		return r.Receipts, r.Logs, r.UsedGas, r.err
 	}
 	// Actual processing
