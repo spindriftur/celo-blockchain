@@ -218,24 +218,41 @@ func TestTxEthCompatible(t *testing.T) {
 		common.FromHex("ff05ff"),
 	)
 
-	encoded, _ := rlp.EncodeToBytes(tx)
-	var parsedTx *Transaction
-	rlp.DecodeBytes(encoded, &parsedTx)
-	if tx.Hash() != parsedTx.Hash() {
-		t.Errorf("parsed pre-signing tx differs from original, want %v, got %v", tx, parsedTx)
+	var parsed *Transaction
+	var encoded []byte
+
+	encoded, _ = rlp.EncodeToBytes(tx)
+	parsed = &Transaction{}
+	rlp.DecodeBytes(encoded, &parsed)
+	if tx.Hash() != parsed.Hash() {
+		t.Errorf("RLP parsed pre-signing tx differs from original, want %v, got %v", tx, parsed)
+	}
+	encoded, _ = tx.MarshalJSON()
+	parsed = &Transaction{}
+	parsed.UnmarshalJSON(encoded)
+	if tx.Hash() != parsed.Hash() {
+		t.Errorf("JSON parsed pre-signing tx differs from original, want %v, got %v", tx, parsed)
 	}
 
+	// Repeat the tests but now with a signed transaction
 	signer := NewEIP155Signer(common.Big1)
 	signed, _ := SignTx(tx, signer, key)
 	sender, _ := Sender(signer, signed)
 	if sender != addr {
 		t.Errorf("recovered sender differs from original, want %v, got %v", addr, sender)
 	}
-	var parsedSignedTx *Transaction
+
 	encoded, _ = rlp.EncodeToBytes(signed)
-	rlp.DecodeBytes(encoded, &parsedSignedTx)
-	if signed.Hash() != parsedSignedTx.Hash() {
-		t.Errorf("parsed post-signing tx differs from original tx, want %v, got %v", signed, parsedSignedTx)
+	parsed = &Transaction{}
+	rlp.DecodeBytes(encoded, &parsed)
+	if signed.Hash() != parsed.Hash() {
+		t.Errorf("RLP parsed post-signing tx differs from original, want %v, got %v", signed, parsed)
+	}
+	encoded, _ = signed.MarshalJSON()
+	parsed = &Transaction{}
+	parsed.UnmarshalJSON(encoded)
+	if signed.Hash() != parsed.Hash() {
+		t.Errorf("JSON parsed post-signing tx differs from original, want %v, got %v", signed, parsed)
 	}
 }
 
